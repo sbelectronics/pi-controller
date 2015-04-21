@@ -16,3 +16,5 @@ sudo echo "i2c-dev" >> /etc/modules
 sudo reboot
 sudo apt-get -y install python-smbus
 sudo apt-get -y install i2c-tools
+
+sudo apt-get -y install python-requests
