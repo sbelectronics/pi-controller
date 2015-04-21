@@ -1,1 +1,18 @@
-uses the ioexpand and keypad objects from the pi nixieclock
+This is Scott's Home Automation Controller project.
+
+It controls several different things:
+
+  * Somfy Blinds via a Sonfy Universal RTS Interface and a Global Cache iTach
+
+  * Lights and Ceiling Fan via an ISY-994i
+ 
+  * Scott's Pandora Player (custom build) - power, song skip
+
+The human interface consists of:
+
+  * 16 Cherry MX-Blue keyswitches, each with a built-in LED
+
+  * Noritake 16x2 VFD display to display Song and Artist
+
+Notes:
+   uses the ioexpand and keypad objects from the pi nixieclock
