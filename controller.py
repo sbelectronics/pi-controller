@@ -8,15 +8,20 @@ import requests
 import threading
 from vfd import VFD
 import traceback
+from elkm1 import ElkConnection, DISARM, ARM_STAY, ARM_AWAY, ARM_NIGHT
 
 SOMFY_ADDR = ("198.0.0.228", 4999)
 STEREO_ADDR = ("198.0.0.215", 80)
+ELK_ADDR = ("198.0.0.219", 2601)
 
 # read the isy credential from a file
 # format is username:password
 ISY_CREDS = open("isycreds","r").readline().strip()
 
-glo_stereo_power_command = None
+glo_stereo_power_update = None
+
+glo_arm_state_update = None
+glo_elk = None
 
 """
 import controller
@@ -163,6 +168,9 @@ class InsteonKeypad(Keypad):
                     if http_off:
                         HttpSender(k["http_addr"], http_off).start()
 
+            if k.get("elk_set_arm",None) is not None:
+                glo_elk.set_arm(k["elk_set_arm"], k["elk_area"])
+
 class Keypad1(InsteonKeypad):
     key_stereo_power = 7
     key_stereo_skip = 6
@@ -193,6 +201,10 @@ class Keypad2(InsteonKeypad):
     key_by_mid = 4
     key_by_down = 2
 
+    key_alarm_disarm = 7
+    key_alarm_stay = 5
+    key_alarm_away = 3
+
     key_lights = 1
     key_fan = 0
 
@@ -200,6 +212,10 @@ class Keypad2(InsteonKeypad):
             key_by_up: {"group": [key_by_mid, key_by_down], "addr": SOMFY_ADDR, "data": "0103U\n"},
             key_by_mid: {"group": [key_by_up, key_by_down], "addr": SOMFY_ADDR, "data": "0103S\n"},
             key_by_down: {"group": [key_by_up, key_by_mid], "addr": SOMFY_ADDR, "data": "0103D\n"},
+
+            key_alarm_disarm: {"group": [key_alarm_stay, key_alarm_away], "elk_area": 1, "elk_set_arm": DISARM},
+            key_alarm_stay: {"group": [key_alarm_disarm, key_alarm_away], "elk_area": 1, "elk_set_arm": ARM_STAY},
+            key_alarm_away: {"group": [key_alarm_disarm, key_alarm_stay], "elk_area": 1, "elk_set_arm": ARM_NIGHT},
 
             key_lights: {"toggle": True, "isy_node": "26717"},
             key_fan: {"toggle": True, "isy_node": "35771"},
@@ -249,7 +265,7 @@ class StereoListenerThread(threading.Thread):
         self.vfd = vfd
 
     def run(self):
-        global glo_stereo_power_command
+        global glo_stereo_power_update
 
         while True:
             try:
@@ -273,7 +289,9 @@ class StereoListenerThread(threading.Thread):
 
                 if self.last_power != r["power"]:
                     self.last_power = r["power"]
-                    glo_stereo_power_command = r["power"]
+                    glo_stereo_power_update = r["power"]
+
+                time.sleep(1)
 
             except:
                 traceback.print_exc()
@@ -284,8 +302,31 @@ class StereoListenerThread(threading.Thread):
                 except:
                     pass
 
+
+class ElkListenerThread(threading.Thread, ElkConnection):
+    def __init__(self, addr):
+        threading.Thread.__init__(self)
+        self.daemon = True
+
+        ElkConnection.__init__(self, addr[0], addr[1])
+        self.last_arm_state = None
+
+    def run(self):
+        self.bufferize()
+
+    def arm_state(self, arm_state, arm_up, alarm_state):
+        global glo_arm_state_update
+
+        if arm_state[0] != self.last_arm_state:
+            self.last_arm_state = arm_state[0]
+            glo_arm_state_update = arm_state[0]
+
+    def connected(self):
+        self.s.write(self.gen_request_arm())
+
 def main():
-    global glo_stereo_power_command
+    global glo_stereo_power_update
+    global glo_arm_state_update, glo_elk
 
     bus = smbus.SMBus(1)
     kp1 = Keypad1(MCP23017(bus, 0x20), 0, led=True)
@@ -296,15 +337,28 @@ def main():
     stereoListener = StereoListenerThread(vfd)
     stereoListener.start()
 
+    elkListener = ElkListenerThread(ELK_ADDR)
+    elkListener.start()
+    glo_elk = elkListener
+
     while 1:
        kp1.poll()
        kp2.poll()
        listener.poll()   # polling makes me sad, but I'm also lazy... ought to thread this some time
 
        # if the stereo listener detected a power button change, then update the button led
-       if glo_stereo_power_command is not None:
-           kp1.keypress(kp1.key_stereo_power, force_state=glo_stereo_power_command, no_act=True)
-           glo_stereo_power_command = None
+       if glo_stereo_power_update is not None:
+           kp1.keypress(kp1.key_stereo_power, force_state=glo_stereo_power_update, no_act=True)
+           glo_stereo_power_update = None
+
+       if glo_arm_state_update is not None:
+           if glo_arm_state_update == DISARM:
+               kp2.keypress(kp2.key_alarm_disarm, no_act=True)
+           elif glo_arm_state_update == ARM_STAY:
+               kp2.keypress(kp2.key_alarm_stay, no_act=True)
+           elif glo_arm_state_update in [ARM_NIGHT, ARM_AWAY]:
+               kp2.keypress(kp2.key_alarm_away, no_act=True)
+           glo_arm_state_update = None
 
        time.sleep(0.01)
 
