@@ -1,3 +1,4 @@
+import datetime
 from keyboard import *
 from ioexpand import *
 from threading import Thread
@@ -146,6 +147,8 @@ class InsteonKeypad(Keypad):
 
         self.setled(keynum, k.get("state", False))
 
+        print datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "keynum %s pressed no_act=%s" % (keynum, str(no_act))
+
         if not no_act:
             if k.get("isy_node",None):
                 if k.get("state", False):
@@ -169,6 +172,7 @@ class InsteonKeypad(Keypad):
                         HttpSender(k["http_addr"], http_off).start()
 
             if k.get("elk_set_arm",None) is not None:
+                #print "ELK DISABLED!"
                 glo_elk.set_arm(k["elk_set_arm"], k["elk_area"])
 
 class Keypad1(InsteonKeypad):
