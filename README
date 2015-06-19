@@ -16,3 +16,6 @@ The human interface consists of:
 
 Notes:
    uses the ioexpand and keypad objects from the pi nixieclock
+
+Crontab:
+   @reboot bash /home/pi/start_controller.sh &> /dev/null
