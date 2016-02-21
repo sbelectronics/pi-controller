@@ -213,9 +213,9 @@ class Keypad2(InsteonKeypad):
     key_fan = 0
 
     keys = {
-            key_by_up: {"group": [key_by_mid, key_by_down], "addr": SOMFY_ADDR, "data": "0103U\n"},
-            key_by_mid: {"group": [key_by_up, key_by_down], "addr": SOMFY_ADDR, "data": "0103S\n"},
-            key_by_down: {"group": [key_by_up, key_by_mid], "addr": SOMFY_ADDR, "data": "0103D\n"},
+            key_by_up: {"group": [key_by_mid, key_by_down], "addr": SOMFY_ADDR, "data": "0103U0103U0103U0103U0103U\n"}, #"0103U\n"},
+            key_by_mid: {"group": [key_by_up, key_by_down], "addr": SOMFY_ADDR, "data": "0103S0103S0103S0103S0103S\n"}, #"0103S\n"},
+            key_by_down: {"group": [key_by_up, key_by_mid], "addr": SOMFY_ADDR, "data": "0103D0103D0103D0103D0103D\n"}, #"0103D\n"},
 
             key_alarm_disarm: {"group": [key_alarm_stay, key_alarm_away], "elk_area": 1, "elk_set_arm": DISARM},
             key_alarm_stay: {"group": [key_alarm_disarm, key_alarm_away], "elk_area": 1, "elk_set_arm": ARM_STAY},
@@ -275,8 +275,13 @@ class StereoListenerThread(threading.Thread):
             try:
                 r = requests.get("http://%s/stereo/getSettings" % STEREO_ADDR[0])
                 r = r.json
-                song = r.get("song","").strip()
-                artist = r.get("artist","").strip()
+                fmstation = r.get("fmstation","")
+                if (fmstation == "pandora"):
+                    song = r.get("song","").strip()
+                    artist = r.get("artist","").strip()
+                else:
+                    song = "     " + fmstation[:-1] + "." + fmstation[-1]
+                    artist = ""
                 if not song:
                    song = ""
                 if not artist:
