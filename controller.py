@@ -276,7 +276,7 @@ class StereoListenerThread(threading.Thread):
                 r = requests.get("http://%s/stereo/getSettings" % STEREO_ADDR[0])
                 r = r.json
                 fmstation = r.get("fmstation","")
-                if (fmstation == "pandora"):
+                if (fmstation == "pandora") or (fmstation.startswith("file:")):
                     song = r.get("song","").strip()
                     artist = r.get("artist","").strip()
                 else:
