@@ -1,3 +1,4 @@
+import argparse
 import datetime
 from keyboard import *
 from ioexpand import *
@@ -274,14 +275,15 @@ class StereoListenerThread(threading.Thread):
         while True:
             try:
                 r = requests.get("http://%s/stereo/getSettings" % STEREO_ADDR[0])
-                r = r.json
+                r = r.json() # XXX Was "r.json"
                 fmstation = r.get("fmstation","")
-                if (fmstation == "pandora") or (fmstation.startswith("file:")):
+                if (fmstation.startswith("radio:")):
+                    song = "     " + fmstation[6:-1] + "." + fmstation[-1]
+                    artist = ""
+                else:
                     song = r.get("song","").strip()
                     artist = r.get("artist","").strip()
-                else:
-                    song = "     " + fmstation[:-1] + "." + fmstation[-1]
-                    artist = ""
+
                 if not song:
                    song = ""
                 if not artist:
@@ -333,41 +335,99 @@ class ElkListenerThread(threading.Thread, ElkConnection):
     def connected(self):
         self.s.write(self.gen_request_arm())
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    defs = {"kp1": True,
+            "kp2": True,
+            "elk": True,
+            "stereo_url": None}
+
+    _help = 'Disable first keypad (default: %s)' % defs['kp1']
+    parser.add_argument(
+        '-1', '--nokp1', dest='kp1', action='store_false',
+        default=defs['kp1'],
+        help=_help)
+
+    _help = 'Disable second keypad (default: %s)' % defs['kp2']
+    parser.add_argument(
+        '-2', '--nokp2', dest='kp2', action='store_false',
+        default=defs['kp2'],
+        help=_help)
+
+    _help = 'Disable elk (default: %s)' % defs['elk']
+    parser.add_argument(
+        '-k', '--noelk', dest='elk', action='store_false',
+        default=defs['elk'],
+        help=_help)
+
+    _help = 'URL of Stereo to control (default: %s)' % defs['stereo_url']
+    parser.add_argument(
+        '-S', '--stereo_url', dest='stereo_url', action='store',
+        default=defs['stereo_url'],
+        help=_help)
+
+    args = parser.parse_args()
+
+    return args
+
 def main():
     global glo_stereo_power_update
     global glo_arm_state_update, glo_elk
 
+    args = parse_args()
+
+    kp1 = None
+    kp2 = None
+    listener = None
+    elkListener = None
+    glo_elk = None
+
     bus = smbus.SMBus(1)
-    kp1 = Keypad1(MCP23017(bus, 0x20), 0, led=True)
-    kp2 = Keypad2(MCP23017(bus, 0x21), 0, led=True)
-    listener = UdpListener([kp1,kp2])
+
+    if (args.kp1):
+        kp1 = Keypad1(MCP23017(bus, 0x20), 0, led=True)
+
+    if (args.kp2):
+        kp2 = Keypad2(MCP23017(bus, 0x21), 0, led=True)
+
+    if (args.kp1) or (args.kp2):
+        listener = UdpListener([kp1,kp2])
 
     vfd = VFD(0,0)
     stereoListener = StereoListenerThread(vfd)
     stereoListener.start()
 
-    elkListener = ElkListenerThread(ELK_ADDR)
-    elkListener.start()
-    glo_elk = elkListener
+    if args.elk:
+        elkListener = ElkListenerThread(ELK_ADDR)
+        elkListener.start()
+        glo_elk = elkListener
 
     while 1:
-       kp1.poll()
-       kp2.poll()
-       listener.poll()   # polling makes me sad, but I'm also lazy... ought to thread this some time
+       if kp1:
+           kp1.poll()
 
-       # if the stereo listener detected a power button change, then update the button led
-       if glo_stereo_power_update is not None:
-           kp1.keypress(kp1.key_stereo_power, force_state=glo_stereo_power_update, no_act=True)
-           glo_stereo_power_update = None
+       if kp2:
+           kp2.poll()
 
-       if glo_arm_state_update is not None:
-           if glo_arm_state_update == DISARM:
-               kp2.keypress(kp2.key_alarm_disarm, no_act=True)
-           elif glo_arm_state_update == ARM_STAY:
-               kp2.keypress(kp2.key_alarm_stay, no_act=True)
-           elif glo_arm_state_update in [ARM_NIGHT, ARM_AWAY]:
-               kp2.keypress(kp2.key_alarm_away, no_act=True)
-           glo_arm_state_update = None
+       if listener:
+          listener.poll()   # polling makes me sad, but I'm also lazy... ought to thread this some time
+
+       if kp1:
+           # if the stereo listener detected a power button change, then update the button led
+           if glo_stereo_power_update is not None:
+               kp1.keypress(kp1.key_stereo_power, force_state=glo_stereo_power_update, no_act=True)
+               glo_stereo_power_update = None
+
+       if elkListener and kp2:
+           if glo_arm_state_update is not None:
+               if glo_arm_state_update == DISARM:
+                   kp2.keypress(kp2.key_alarm_disarm, no_act=True)
+               elif glo_arm_state_update == ARM_STAY:
+                   kp2.keypress(kp2.key_alarm_stay, no_act=True)
+               elif glo_arm_state_update in [ARM_NIGHT, ARM_AWAY]:
+                   kp2.keypress(kp2.key_alarm_away, no_act=True)
+               glo_arm_state_update = None
 
        time.sleep(0.01)
 
