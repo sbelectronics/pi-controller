@@ -11,6 +11,12 @@ import threading
 from vfd import VFD
 import traceback
 from elkm1 import ElkConnection, DISARM, ARM_STAY, ARM_AWAY, ARM_NIGHT
+from motor import Motor, L293_1, L293_2, L293_ENABLE, L293_3, L293_4, L293_ENABLE2
+from motorpot import MotorPot
+
+REMOTE_UPDATE_THRESH = 2
+LOCAL_UPDATE_THRESH = 6
+LOCAL_UPDATE_AFTER_MOVE_THRESH = 20
 
 SOMFY_ADDR = ("198.0.0.228", 4999)
 STEREO_ADDR = ("198.0.0.215", 80)
@@ -21,6 +27,8 @@ ELK_ADDR = ("198.0.0.219", 2601)
 ISY_CREDS = open("isycreds","r").readline().strip()
 
 glo_stereo_power_update = None
+glo_stereo_volume_update = None
+glo_not_moving_count = 0
 
 glo_arm_state_update = None
 glo_elk = None
@@ -267,10 +275,12 @@ class StereoListenerThread(threading.Thread):
         self.last_song = None
         self.last_artist = None
         self.last_power = None
+        self.last_volume = None
+        self.last_moving_time = time.time()
         self.vfd = vfd
 
     def run(self):
-        global glo_stereo_power_update
+        global glo_stereo_power_update, glo_stereo_volume_update, glo_not_moving_count
 
         while True:
             try:
@@ -290,17 +300,31 @@ class StereoListenerThread(threading.Thread):
                    artist = ""
                 if (self.last_song != song) or (self.last_artist != artist):
                     #print song, artist
-                    self.vfd.cls()
-                    self.vfd.setPosition(0,0)
-                    self.vfd.writeStr(song[:16])
-                    self.vfd.setPosition(0,1)
-                    self.vfd.writeStr(artist[:16])
-                    self.last_song = song
-                    self.last_artist = artist
+                    if self.vfd:
+                        self.vfd.cls()
+                        self.vfd.setPosition(0,0)
+                        self.vfd.writeStr(song[:16])
+                        self.vfd.setPosition(0,1)
+                        self.vfd.writeStr(artist[:16])
+                        self.last_song = song
+                        self.last_artist = artist
 
                 if self.last_power != r["power"]:
                     self.last_power = r["power"]
                     glo_stereo_power_update = r["power"]
+
+                #if (r["volumeMoving"] and r["volumeSetPoint"] and (abs(r["volumeSetPoint"] - self.last_volume) >= REMOTE_UPDATE_THRESH)):
+                #    glo_stereo_volume_update = r["volumeSetPoint"]
+                #    self.last_volume = r["volumeSetPoint"]
+
+                if r["volumeMoving"]:
+                    glo_not_moving_count = 0
+                else:
+                    glo_not_moving_count += 1
+
+                if (not r["volumeMoving"]) and ((not self.last_volume) or (abs(r["volumeCurrent"] - self.last_volume) >= REMOTE_UPDATE_THRESH)):
+                    glo_stereo_volume_update = r["volumeCurrent"]
+                    self.last_volume = r["volumeCurrent"]
 
                 time.sleep(1)
 
@@ -334,6 +358,50 @@ class ElkListenerThread(threading.Thread, ElkConnection):
 
     def connected(self):
         self.s.write(self.gen_request_arm())
+        
+class ControllerMotorPot(MotorPot):
+    def __init__(self, *args, **kwargs):
+        self.lastValue = None
+        self.lastSendTime = time.time()
+        super(ControllerMotorPot, self).__init__(*args, **kwargs)
+
+    def check_for_request(self):
+        global glo_stereo_volume_update
+
+        if glo_stereo_volume_update:
+            print "receive", glo_stereo_volume_update
+
+            if glo_not_moving_count<2:
+                # Make sure the master has stopped moving for at least 2 seconds before we start responding to it,
+                # otherwise we might respond to a movement-in-progress.
+                #print "ignoring update, only", glo_not_moving_count, "not moving replies received"
+                pass
+            else:
+                self.set(glo_stereo_volume_update)
+                glo_stereo_volume_update = None
+
+    def handle_value(self):
+        global glo_not_moving_count
+
+        if not (self.lastValue):
+            self.lastValue = self.value
+
+        delta = abs(self.value - self.lastValue)
+        if (not self.moving) and (delta > LOCAL_UPDATE_THRESH):
+            self.lastValue = self.value
+
+            elapsed = time.time() - self.lastStopTime
+            if (elapsed<=2) and (delta < LOCAL_UPDATE_AFTER_MOVE_THRESH):
+                print "ignoring movement after update received", self.value
+            else:
+                print "send", self.value
+                try:
+                    glo_not_moving_count = 0
+                    r = requests.get("http://%s/stereo/setVolume?volume=%d" % (STEREO_ADDR[0], self.value))
+                except:
+                    pass
+
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -341,6 +409,8 @@ def parse_args():
     defs = {"kp1": True,
             "kp2": True,
             "elk": True,
+            "vfd": True,
+            "motorpot": False,
             "stereo_url": None}
 
     _help = 'Disable first keypad (default: %s)' % defs['kp1']
@@ -359,6 +429,18 @@ def parse_args():
     parser.add_argument(
         '-k', '--noelk', dest='elk', action='store_false',
         default=defs['elk'],
+        help=_help)
+
+    _help = 'Disable vfd (default: %s)' % defs['vfd']
+    parser.add_argument(
+        '-f', '--novfd', dest='vfd', action='store_false',
+        default=defs['vfd'],
+        help=_help)
+
+    _help = 'Enable motorpot (default: %s)' % defs['motorpot']
+    parser.add_argument(
+        '-m', '--motorpot', dest='motorpot', action='store_true',
+        default=defs['motorpot'],
         help=_help)
 
     _help = 'URL of Stereo to control (default: %s)' % defs['stereo_url']
@@ -382,6 +464,8 @@ def main():
     listener = None
     elkListener = None
     glo_elk = None
+    vfd = None
+    motorpot = None
 
     bus = smbus.SMBus(1)
 
@@ -394,7 +478,12 @@ def main():
     if (args.kp1) or (args.kp2):
         listener = UdpListener([kp1,kp2])
 
-    vfd = VFD(0,0)
+    if (args.vfd):
+        vfd = VFD(0,0)
+
+    if (args.motorpot):
+        motorpot = ControllerMotorPot(bus, dirmult=1, verbose=False, motor_pin1=L293_3, motor_pin2=L293_4, motor_enable = L293_ENABLE2)
+
     stereoListener = StereoListenerThread(vfd)
     stereoListener.start()
 
