@@ -13,6 +13,7 @@ import traceback
 from elkm1 import ElkConnection, DISARM, ARM_STAY, ARM_AWAY, ARM_NIGHT
 from motor import Motor, L293_1, L293_2, L293_ENABLE, L293_3, L293_4, L293_ENABLE2
 from motorpot import MotorPot
+import RPi.GPIO as IO
 
 REMOTE_UPDATE_THRESH = 2
 LOCAL_UPDATE_THRESH = 6
@@ -28,6 +29,7 @@ ISY_CREDS = open("isycreds","r").readline().strip()
 
 glo_stereo_power_update = None
 glo_stereo_volume_update = None
+glo_stereo_power_state = False
 glo_not_moving_count = 0
 
 glo_arm_state_update = None
@@ -280,7 +282,7 @@ class StereoListenerThread(threading.Thread):
         self.vfd = vfd
 
     def run(self):
-        global glo_stereo_power_update, glo_stereo_volume_update, glo_not_moving_count
+        global glo_stereo_power_update, glo_stereo_volume_update, glo_not_moving_count, glo_stereo_power_state
 
         while True:
             try:
@@ -312,6 +314,8 @@ class StereoListenerThread(threading.Thread):
                 if self.last_power != r["power"]:
                     self.last_power = r["power"]
                     glo_stereo_power_update = r["power"]
+
+                glo_stereo_power_state = r["power"]
 
                 #if (r["volumeMoving"] and r["volumeSetPoint"] and (abs(r["volumeSetPoint"] - self.last_volume) >= REMOTE_UPDATE_THRESH)):
                 #    glo_stereo_volume_update = r["volumeSetPoint"]
@@ -401,6 +405,42 @@ class ControllerMotorPot(MotorPot):
                 except:
                     pass
 
+class PowerSwitch(threading.Thread):
+    def __init__(self, powerPin=4):
+        threading.Thread.__init__(self)
+        self.daemon = True
+
+        self.powerPin = powerPin
+
+        IO.setup(self.powerPin, IO.IN, pull_up_down=IO.PUD_UP)
+
+        self.lastPowerState = IO.input(self.powerPin)
+
+        self.start()
+
+    def run(self):
+        while True:
+            self.powerState = IO.input(self.powerPin)
+            if self.powerState and (not self.lastPowerState):
+                self.power_pushed()
+                time.sleep(1)   # lazy way of debouncing
+
+            self.lastPowerState = self.powerState
+
+            time.sleep(0.1)
+
+    def power_pushed(self):
+        print "power_pushed"
+        if glo_stereo_power_state:
+            try:
+                r = requests.get("http://%s/stereo/setPower?value=false" % (STEREO_ADDR[0],))
+            except:
+                traceback.print_exc()
+        else:
+            try:
+                r = requests.get("http://%s/stereo/setPower?value=true" % (STEREO_ADDR[0],))
+            except:
+                traceback.print_exc()
 
 
 def parse_args():
@@ -410,6 +450,7 @@ def parse_args():
             "kp2": True,
             "elk": True,
             "vfd": True,
+            "powswitch": False,
             "motorpot": False,
             "stereo_url": None}
 
@@ -443,6 +484,12 @@ def parse_args():
         default=defs['motorpot'],
         help=_help)
 
+    _help = 'Enable powerswitch on gpio4 (default: %s)' % defs['powswitch']
+    parser.add_argument(
+        '-p', '--powswitch', dest='powswitch', action='store_true',
+        default=defs['powswitch'],
+        help=_help)
+
     _help = 'URL of Stereo to control (default: %s)' % defs['stereo_url']
     parser.add_argument(
         '-S', '--stereo_url', dest='stereo_url', action='store',
@@ -466,6 +513,7 @@ def main():
     glo_elk = None
     vfd = None
     motorpot = None
+    powSwitch = None
 
     bus = smbus.SMBus(1)
 
@@ -483,6 +531,9 @@ def main():
 
     if (args.motorpot):
         motorpot = ControllerMotorPot(bus, dirmult=1, verbose=False, motor_pin1=L293_3, motor_pin2=L293_4, motor_enable = L293_ENABLE2)
+
+    if (args.powswitch):
+        powSwitch = PowerSwitch()
 
     stereoListener = StereoListenerThread(vfd)
     stereoListener.start()
