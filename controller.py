@@ -287,7 +287,10 @@ class StereoListenerThread(threading.Thread):
         while True:
             try:
                 r = requests.get("http://%s/stereo/getSettings" % STEREO_ADDR[0])
-                r = r.json() # XXX Was "r.json"
+                try:
+                    r = r.json() 
+                except TypeError:
+                    r = r.json   # controller has older requests library??
                 fmstation = r.get("fmstation","")
                 if (fmstation.startswith("radio:")):
                     song = "     " + fmstation[6:-1] + "." + fmstation[-1]

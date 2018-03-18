@@ -1,1 +1,2 @@
-scp start_controller.sh ../nixiecalc/ioexpand.py ../nixiecalc/keyboard.py ../pi-vfd/vfd.py controller.py elkm1.py elkauth isycreds pi@198.0.0.232:/home/pi/
+rsync -avz --exclude "__history" --exclude "*~" --exclude "*.gif" --exclude "*.JPG" -e ssh . ../nixiecalc/ioexpand.py ../nixiecalc/keyboard.py ../pi-vfd/vfd.py ../pi-stereo/motorpot.py ../pi-stereo/motor.py ../pi-stereo/ads1015.py pi@198.0.0.232:/home/pi
+
